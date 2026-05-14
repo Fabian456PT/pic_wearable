@@ -88,7 +88,7 @@ void setup() {
   analogReadResolution(12);
 
   // Iniciar Bluetooth
-  BLEDevice::init("Wearable_MentalHealth");
+  BLEDevice::init("Mindsight");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
   BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -139,6 +139,7 @@ void loop() {
       // Se carregou, guarda na memória que o evento aconteceu!
       if (estadoBotao == LOW) {
         eventoAtivo = 1; 
+        Serial.println(">>> BOTAO FISICO CLICADO! <<<");
       }
     }
   }
@@ -184,13 +185,15 @@ void loop() {
       Serial.print("BLE Enviado: ");
       Serial.println(pacoteJSON);
 
-      // Limpa a memória do clique do botão depois da App o receber
-      eventoAtivo = 0; 
+      
     } else {
       // Se não houver App ligada, imprime no ecrã para tu testares
       Serial.print("Local -> BPM: "); Serial.print(beatAvg);
       Serial.print(" | EDA: "); Serial.print(edaFinal);
       Serial.print(" | Mov: "); Serial.println(flagMovimento);
+      Serial.print(" | Botao (evt): "); Serial.println(eventoAtivo);
     }
+    // Limpa a memória do clique do botão depois da App o receber
+      eventoAtivo = 0; 
   }
 }
