@@ -1,52 +1,196 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "MAX30105.h"
+#include "heartRate.h"
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <BLEDevice.h>
+#include <BLEServer.h>
+#include <BLEUtils.h>
+#include <BLE2902.h>
 
+// --- 1. DEFINIÇÕES DE PINOS ---
+const int GSR_PIN = A0;   // Sensor de Suor (Grove)
+const int BOTAO_PIN = D3; // Botão Marcador de Evento
+
+// --- 2. DEFINIÇÕES BLUETOOTH (BLE) ---
+#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+BLEServer* pServer = NULL;
+BLECharacteristic* pCharacteristic = NULL;
+bool deviceConnected = false;
+
+// --- 3. OBJETOS DOS SENSORES ---
 MAX30105 particleSensor;
+Adafruit_MPU6050 mpu;
 
-// O XIAO ESP32-C3 tem um LED no pino 10 (geralmente azul ou amarelo)
-const int LED_PIN = 10; 
+// --- 4. VARIÁVEIS GLOBAIS ---
+// Lógica do Coração
+const byte RATE_SIZE = 4;
+byte rates[RATE_SIZE];
+byte rateSpot = 0;
+long lastBeat = 0;
+float beatsPerMinute;
+int beatAvg = 0;
+
+// Lógica do Botão
+int estadoBotao;
+int ultimoEstadoBotao = HIGH;
+unsigned long ultimoTempoClique = 0;
+int eventoAtivo = 0; // Fica a 1 quando clicas, volta a 0 após o envio BLE
+
+// Cronómetro Mestre (Substitui o delay)
+unsigned long ultimoTempoEnvioBLE = 0;
+const int INTERVALO_ENVIO_BLE = 1000; // 1000 milissegundos = 1 segundo
+
+// Callbacks para detetar quando a App Python se liga/desliga
+class MyServerCallbacks: public BLEServerCallbacks {
+    void onConnect(BLEServer* pServer) { deviceConnected = true; };
+    void onDisconnect(BLEServer* pServer) { 
+      deviceConnected = false; 
+      pServer->startAdvertising(); // Volta a procurar a App
+    }
+};
 
 void setup() {
-    pinMode(LED_PIN, OUTPUT);
-    Serial.begin(115200);
+  Serial.begin(115200);
+  
+  // AVISO: Quando ligares à bateria sem PC, apaga ou comenta a linha abaixo!
+  // while(!Serial); 
 
-    // Loop de espera para dares tempo ao Monitor Serial de abrir
-    for(int i = 5; i > 0; i--) {
-        digitalWrite(LED_PIN, LOW); // Liga LED (logica inversa em alguns XIAO)
-        delay(500);
-        digitalWrite(LED_PIN, HIGH); // Desliga LED
-        delay(500);
-        Serial.printf("A começar em %d...\n", i);
-    }
+  Serial.println("A iniciar o Wearable de Saúde Mental...");
 
-    Serial.println("A inicializar I2C (Pinos 6 e 7)...");
-    Wire.begin(6, 7); 
+  // Iniciar Botão com resistência interna
+  pinMode(BOTAO_PIN, INPUT_PULLUP);
 
-    if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
-        Serial.println("ERRO: Sensor MAX3010X não encontrado!");
-        Serial.println("Verifica se o SDA está no D4 e SCL no D5.");
-        while (1) {
-            // Pisca rápido se houver erro
-            digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-            delay(100);
-        }
-    }
+  // Iniciar linha de comunicação I2C
+  Wire.begin();
 
-    Serial.println("Sensor detetado! A configurar...");
-    particleSensor.setup(0x1F, 4, 2, 400, 411, 4096);
-    Serial.println("Tudo pronto. Coloca o dedo no sensor.");
+  // Iniciar MAX30102 (Coração)
+  if (!particleSensor.begin(Wire, I2C_SPEED_FAST)) {
+    Serial.println("Erro: MAX30102 não encontrado.");
+    while (1);
+  }
+  particleSensor.setup();
+  particleSensor.setPulseAmplitudeRed(0x0A);
+  particleSensor.setPulseAmplitudeGreen(0);
+
+  // Iniciar MPU6050 (Movimento)
+  if (!mpu.begin()) {
+    Serial.println("Erro: MPU6050 não encontrado.");
+    while (1);
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  // Iniciar GSR (Resolução de leitura a 12-bits)
+  analogReadResolution(12);
+
+  // Iniciar Bluetooth
+  BLEDevice::init("Wearable_MentalHealth");
+  pServer = BLEDevice::createServer();
+  pServer->setCallbacks(new MyServerCallbacks());
+  BLEService *pService = pServer->createService(SERVICE_UUID);
+  pCharacteristic = pService->createCharacteristic(
+                      CHARACTERISTIC_UUID,
+                      BLECharacteristic::PROPERTY_NOTIFY
+                    );
+  pCharacteristic->addDescriptor(new BLE2902());
+  pService->start();
+  BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
+  pAdvertising->addServiceUUID(SERVICE_UUID);
+  BLEDevice::startAdvertising();
+
+  Serial.println("Sistema Pronto! A aguardar ligação da App...");
 }
 
 void loop() {
-    long irValue = particleSensor.getIR();
+  // Tempo atual em milissegundos
+  unsigned long tempoAtual = millis();
 
-    if (irValue < 50000) {
-        Serial.println("Nenhum dedo detetado...");
-    } else {
-        Serial.print("IR Value: ");
-        Serial.println(irValue);
+  // ==========================================
+  // 1. OUVIR O CORAÇÃO (Corre à velocidade máxima)
+  // ==========================================
+  long irValue = particleSensor.getIR();
+  if (checkForBeat(irValue) == true) {
+    long delta = millis() - lastBeat;
+    lastBeat = millis();
+    beatsPerMinute = 60 / (delta / 1000.0);
+    if (beatsPerMinute < 255 && beatsPerMinute > 20) {
+      rates[rateSpot++] = (byte)beatsPerMinute;
+      rateSpot %= RATE_SIZE;
+      beatAvg = 0;
+      for (byte x = 0 ; x < RATE_SIZE ; x++) beatAvg += rates[x];
+      beatAvg /= RATE_SIZE;
     }
+  }
+
+  // ==========================================
+  // 2. LER O BOTÃO (Com filtro Anti-Vibração)
+  // ==========================================
+  int leituraBotao = digitalRead(BOTAO_PIN);
+  if (leituraBotao != ultimoEstadoBotao) {
+    ultimoTempoClique = tempoAtual;
+  }
+  if ((tempoAtual - ultimoTempoClique) > 50) {
+    if (leituraBotao != estadoBotao) {
+      estadoBotao = leituraBotao;
+      // Se carregou, guarda na memória que o evento aconteceu!
+      if (estadoBotao == LOW) {
+        eventoAtivo = 1; 
+      }
+    }
+  }
+  ultimoEstadoBotao = leituraBotao;
+
+  // ==========================================
+  // 3. EMPACOTAR E ENVIAR DADOS (1x por Segundo)
+  // ==========================================
+  if (tempoAtual - ultimoTempoEnvioBLE >= INTERVALO_ENVIO_BLE) {
+    ultimoTempoEnvioBLE = tempoAtual; // Reinicia o cronómetro de envio
+
+    // A. Ler o Suor (GSR)
+    // Fazemos 5 leituras rápidas e calculamos a média para estabilidade
+    long somaGSR = 0;
+    for(int i = 0; i < 5; i++) {
+      somaGSR += analogRead(GSR_PIN);
+    }
+    int edaFinal = somaGSR / 5;
+
+    // B. Ler Giroscópio (O Detetor de Mentiras do Corpo)
+    sensors_event_t a, g, temp;
+    mpu.getEvent(&a, &g, &temp);
     
-    delay(100); 
+    int flagMovimento = 0;
+    // Se o braço estiver a abanar muito (> 1.5 rad/s) ou sofrer um impacto (> 15 m/s^2)
+    // Nota: O Z da gravidade é ~9.8, por isso subtraímos 9.8 para ver o impacto real
+    if (abs(g.gyro.x) > 1.5 || abs(g.gyro.y) > 1.5 || abs(g.gyro.z) > 1.5 || 
+        abs(a.acceleration.x) > 15.0 || abs(a.acceleration.y) > 15.0 || abs(a.acceleration.z - 9.8) > 5.0) {
+      flagMovimento = 1; 
+    }
+
+    // C. O Teu Pacote de Dados JSON
+    // Só envia por Bluetooth se a App estiver conectada
+    if (deviceConnected) {
+      String pacoteJSON = "{\"bpm\": " + String(beatAvg) + 
+                          ", \"eda\": " + String(edaFinal) + 
+                          ", \"mov\": " + String(flagMovimento) + 
+                          ", \"evt\": " + String(eventoAtivo) + "}";
+
+      pCharacteristic->setValue(pacoteJSON.c_str());
+      pCharacteristic->notify();
+
+      Serial.print("BLE Enviado: ");
+      Serial.println(pacoteJSON);
+
+      // Limpa a memória do clique do botão depois da App o receber
+      eventoAtivo = 0; 
+    } else {
+      // Se não houver App ligada, imprime no ecrã para tu testares
+      Serial.print("Local -> BPM: "); Serial.print(beatAvg);
+      Serial.print(" | EDA: "); Serial.print(edaFinal);
+      Serial.print(" | Mov: "); Serial.println(flagMovimento);
+    }
+  }
 }
