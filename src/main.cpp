@@ -32,6 +32,10 @@ byte rateSpot = 0;
 long lastBeat = 0;
 float beatsPerMinute;
 int beatAvg = 0;
+// Limites de Calibração (Filtro de Ruído)
+const float LIMITE_GIROSCOPIO = 4.5;    // rad/s (Rotação para rejeitar dados)
+const float LIMITE_ACELERACAO = 15.0;   // m/s^2 (Impacto para rejeitar dados)
+const int TEMPO_DEBOUNCE_BOT = 50;      // ms (Filtro anti-vibração do botão)
 
 // Lógica do Botão
 int estadoBotao;
@@ -133,7 +137,7 @@ void loop() {
   if (leituraBotao != ultimoEstadoBotao) {
     ultimoTempoClique = tempoAtual;
   }
-  if ((tempoAtual - ultimoTempoClique) > 50) {
+  if ((tempoAtual - ultimoTempoClique) > TEMPO_DEBOUNCE_BOT) {
     if (leituraBotao != estadoBotao) {
       estadoBotao = leituraBotao;
       // Se carregou, guarda na memória que o evento aconteceu!
@@ -169,8 +173,8 @@ void loop() {
     float magnitude = sqrt(pow(a.acceleration.x, 2) + pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2));
     
     // Se o braço sofrer rotação rápida (> 4.5 rad/s) OU impacto brusco em qualquer direção (Magnitude - Gravidade > 15 m/s^2)
-    if (abs(g.gyro.x) > 4.5 || abs(g.gyro.y) > 4.5 || abs(g.gyro.z) > 4.5 || 
-        abs(magnitude - 9.8) > 15.0) {
+    if (abs(g.gyro.x) > LIMITE_GIROSCOPIO || abs(g.gyro.y) > LIMITE_GIROSCOPIO || abs(g.gyro.z) > LIMITE_GIROSCOPIO || 
+        abs(magnitude - 9.8) > LIMITE_ACELERACAO) {
       
       flagMovimento = 1; 
       
@@ -190,16 +194,18 @@ void loop() {
     // C. O Teu Pacote de Dados JSON
     // Só envia por Bluetooth se a App estiver conectada
     if (deviceConnected) {
-      String pacoteJSON = "{\"bpm\": " + String(beatAvg) + 
-                          ", \"eda\": " + String(edaFinal) + 
-                          ", \"mov\": " + String(flagMovimento) + 
-                          ", \"evt\": " + String(eventoAtivo) + "}";
+      // Criamos uma caixa de memória fixa de 100 caracteres (não fragmenta a memória)
+      char bufferJSON[100]; 
+      
+      // Injetamos os números diretamente no texto formatado
+      snprintf(bufferJSON, sizeof(bufferJSON), "{\"bpm\":%d,\"eda\":%d,\"mov\":%d,\"evt\":%d}", 
+               beatAvg, edaFinal, flagMovimento, eventoAtivo);
 
-      pCharacteristic->setValue(pacoteJSON.c_str());
+      pCharacteristic->setValue(bufferJSON);
       pCharacteristic->notify();
 
       Serial.print("BLE Enviado: ");
-      Serial.println(pacoteJSON);
+      Serial.println(bufferJSON);
 
       
     } else {
