@@ -26,7 +26,7 @@ Adafruit_MPU6050 mpu;
 
 // --- 4. VARIÁVEIS GLOBAIS ---
 // Lógica do Coração
-const byte RATE_SIZE = 4;
+const byte RATE_SIZE = 10;
 byte rates[RATE_SIZE];
 byte rateSpot = 0;
 long lastBeat = 0;
