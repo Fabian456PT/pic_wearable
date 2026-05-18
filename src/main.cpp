@@ -121,9 +121,20 @@ void loop() {
     long delta = millis() - lastBeat;
     lastBeat = millis();
     beatsPerMinute = 60 / (delta / 1000.0);
+    
     if (beatsPerMinute < 255 && beatsPerMinute > 20) {
-      rates[rateSpot++] = (byte)beatsPerMinute;
-      rateSpot %= RATE_SIZE;
+      
+      // >>> O NOVO ARRANOQUE RÁPIDO (FAST RECOVERY) <<<
+      // Se a lista foi limpa pelo filtro de movimento (o primeiro valor é 0)
+      if (rates[0] == 0) {
+        // Enchemos as 10 posições instantaneamente com este primeiro batimento limpo
+        for (byte x = 0; x < RATE_SIZE; x++) rates[x] = (byte)beatsPerMinute;
+      } else {
+        // Comportamento normal: substitui apenas o batimento mais antigo
+        rates[rateSpot++] = (byte)beatsPerMinute;
+        rateSpot %= RATE_SIZE;
+      }
+      
       beatAvg = 0;
       for (byte x = 0 ; x < RATE_SIZE ; x++) beatAvg += rates[x];
       beatAvg /= RATE_SIZE;
