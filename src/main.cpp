@@ -164,11 +164,27 @@ void loop() {
     mpu.getEvent(&a, &g, &temp);
     
     int flagMovimento = 0;
-    // Se o braço estiver a abanar muito (> 1.5 rad/s) ou sofrer um impacto (> 15 m/s^2)
-    // Nota: O Z da gravidade é ~9.8, por isso subtraímos 9.8 para ver o impacto real
-    if (abs(g.gyro.x) > 1.5 || abs(g.gyro.y) > 1.5 || abs(g.gyro.z) > 1.5 || 
-        abs(a.acceleration.x) > 15.0 || abs(a.acceleration.y) > 15.0 || abs(a.acceleration.z - 9.8) > 5.0) {
+    
+    // Calcula a força total independentemente da orientação do relógio (Teorema de Pitágoras em 3D)
+    float magnitude = sqrt(pow(a.acceleration.x, 2) + pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2));
+    
+    // Se o braço sofrer rotação rápida (> 4.5 rad/s) OU impacto brusco em qualquer direção (Magnitude - Gravidade > 15 m/s^2)
+    if (abs(g.gyro.x) > 4.5 || abs(g.gyro.y) > 4.5 || abs(g.gyro.z) > 4.5 || 
+        abs(magnitude - 9.8) > 15.0) {
+      
       flagMovimento = 1; 
+      
+      // >>> FILTRO DE HARDWARE ATIVADO <<<
+      // Se há movimento excessivo, eliminamos os dados ruidosos
+      edaFinal = 0;
+      beatAvg = 0;
+      
+      // Limpamos o histórico do array cardíaco para não arrastar o erro 
+      // para os segundos seguintes quando o movimento parar
+      rateSpot = 0;
+      for (byte x = 0 ; x < RATE_SIZE ; x++) rates[x] = 0;
+      
+      Serial.println("RUÍDO DETETADO! Dados limpos para envio.");
     }
 
     // C. O Teu Pacote de Dados JSON
