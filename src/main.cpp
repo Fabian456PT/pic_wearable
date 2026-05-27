@@ -42,12 +42,13 @@ int estadoBotao;
 int ultimoEstadoBotao = HIGH;
 unsigned long ultimoTempoClique = 0;
 int eventoAtivo = 0; // Fica a 1 quando clicas, volta a 0 após o envio BLE
+unsigned long tempoInicioClique = 0;
 
 // Cronómetro Mestre (Substitui o delay)
 unsigned long ultimoTempoEnvioBLE = 0;
 const int INTERVALO_ENVIO_BLE = 1000; // 1000 milissegundos = 1 segundo
 
-// Callbacks para detetar quando a App Python se liga/desliga
+// Callbacks para detetar quando a app se liga/desliga
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) { deviceConnected = true; };
     void onDisconnect(BLEServer* pServer) { 
@@ -61,6 +62,42 @@ void setup() {
   
   // AVISO: Quando ligares à bateria sem PC, apaga ou comenta a linha abaixo!
   // while(!Serial); 
+
+  // Configura o botão imediatamente para o podermos ler
+  pinMode(BOTAO_PIN, INPUT_PULLUP); 
+
+  // Pergunta ao chip: "Porque é que acordaste?"
+  esp_sleep_wakeup_cause_t causaAcordar = esp_sleep_get_wakeup_cause();
+
+  // Se o relógio acordou porque alguém tocou no botão (saiu do Deep Sleep)
+  if (causaAcordar == ESP_SLEEP_WAKEUP_GPIO) {
+    Serial.println("A acordar... Mantém o dedo durante 5 segundos para ligar.");
+    
+    unsigned long tempoAcordar = millis();
+    bool dedoMantido = true;
+
+    // Fica preso neste mini-ciclo durante 5000ms a vigiar o dedo do utilizador
+    while (millis() - tempoAcordar < 5000) {
+      if (digitalRead(BOTAO_PIN) == HIGH) { 
+        // O dedo saiu antes do tempo! É um falso alarme.
+        dedoMantido = false;
+        break; // Foge do ciclo while
+      }
+      delay(10); // Pausa minúscula para o chip não bloquear
+    }
+
+    // Se o dedo foi levantado antes dos 5 segundos, volta a apagar tudo!
+    if (dedoMantido == false) {
+      Serial.println("Falso alarme. A regressar ao Deep Sleep...");
+      // Prepara o despertador de novo
+      esp_deep_sleep_enable_gpio_wakeup(1ULL << BOTAO_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+      // Apaga as luzes
+      esp_deep_sleep_start(); 
+    }
+    
+    // Se o código chegou aqui, parabéns, o utilizador segurou os 5 segundos!
+    Serial.println(">>> 5 SEGUNDOS CONCLUÍDOS. A iniciar sensores e Bluetooth! <<<");
+  }
 
   Serial.println("A iniciar o Wearable de Saúde Mental...");
 
@@ -142,20 +179,50 @@ void loop() {
   }
 
   // ==========================================
-  // 2. LER O BOTÃO (Com filtro Anti-Vibração)
+  // 2. LER O BOTÃO (Eventos vs Deep Sleep)
   // ==========================================
   int leituraBotao = digitalRead(BOTAO_PIN);
+  static bool processadoCliqueLongo = false; 
+
   if (leituraBotao != ultimoEstadoBotao) {
     ultimoTempoClique = tempoAtual;
   }
-  if ((tempoAtual - ultimoTempoClique) > TEMPO_DEBOUNCE_BOT) {
+
+  if ((tempoAtual - ultimoTempoClique) > TEMPO_DEBOUNCE_BOT) { 
     if (leituraBotao != estadoBotao) {
       estadoBotao = leituraBotao;
-      // Se carregou, guarda na memória que o evento aconteceu!
-      if (estadoBotao == LOW) {
-        eventoAtivo = 1; 
-        Serial.println(">>> BOTAO FISICO CLICADO! <<<");
+
+      if (estadoBotao == LOW) { // Dedo desceu
+        tempoInicioClique = tempoAtual; 
+        processadoCliqueLongo = false;  
+      } 
+      else { // Dedo subiu (Botão largado)
+        if (!processadoCliqueLongo) {
+          unsigned long duracao = tempoAtual - tempoInicioClique;
+          if (duracao > 50) { 
+            eventoAtivo = 1; // CLIQUE CURTO!
+            Serial.println(">>> CLIQUE CURTO: Evento de Stress Marcado! <<<");
+          }
+        }
       }
+    }
+  }
+
+  // A MAGIA DOS 5 SEGUNDOS (Entrar em Sleep)
+  if (leituraBotao == LOW && !processadoCliqueLongo) {
+    if ((tempoAtual - tempoInicioClique) >= 5000) { // 5000ms = 5 segundos
+      processadoCliqueLongo = true; 
+      
+      Serial.println(">>> DESLIGAR (DEEP SLEEP)! Boa noite... <<<");
+      
+      // 1. Opcional: Aqui poderias desligar os LEDs do MAX30102 se não desligarem sozinhos
+      // particleSensor.shutDown();   VERIFICAR SE O LED DESLIGA SOZINHO OU NÃO!!!!!!!!!!!!!!!!!!!!!!!!!
+      
+      // 2. Armar o despertador. (Avisa que o pino do botão a LOW acorda a placa)
+      esp_deep_sleep_enable_gpio_wakeup(1ULL << BOTAO_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+      
+      // 3. Corta a energia do cérebro. O código morre nesta linha!
+      esp_deep_sleep_start(); 
     }
   }
   ultimoEstadoBotao = leituraBotao;
