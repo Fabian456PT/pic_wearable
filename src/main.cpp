@@ -103,6 +103,25 @@ void reativarSensores() {
   particleSensor.setPulseAmplitudeGreen(0);
 }
 
+void entrarEmComaProfundo() {
+  Serial.println("\n>>> INICIAR ENCERRAMENTO TOTAL (DEEP SLEEP) <<<");
+  particleSensor.setPulseAmplitudeRed(0);
+  particleSensor.setPulseAmplitudeGreen(0);
+  particleSensor.shutDown();
+  
+  Wire.beginTransmission(0x68);
+  Wire.write(0x6B);  
+  Wire.write(0x40);  
+  Wire.endTransmission();
+
+  BLEDevice::deinit(true);
+
+  esp_deep_sleep_enable_gpio_wakeup(1ULL << BOTAO_PIN, ESP_GPIO_WAKEUP_GPIO_LOW);
+  Serial.println("A cortar energia... Boa noite!");
+  Serial.flush();
+  esp_deep_sleep_start(); 
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.println("A iniciar o Wearable de Saúde Mental...");
@@ -147,6 +166,17 @@ void setup() {
 }
 
 void loop() {
+
+  // >>> ADICIONA ESTE BLOCO NO INÍCIO DO LOOP <<<
+  if (Serial.available() > 0) {
+    String comando = Serial.readStringUntil('\n');
+    comando.trim(); // Limpa espaços invisíveis ou quebras de linha
+    
+    if (comando == "sleep") {
+      entrarEmComaProfundo(); // Chama a tua função se digitares "sleep"
+    }
+  }
+
   unsigned long tempoAtual = millis();
 
   // ==========================================
