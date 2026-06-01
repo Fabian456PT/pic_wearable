@@ -38,7 +38,7 @@ float beatsPerMinute;
 // Acumulador para média dos 3 segundos
 int bpmAcumulado = 0;
 int bpmContagem = 0;
-int beatAvgEnvio = 0;     // Último valor médio válido para enviar
+float beatAvgEnvio = 0.0;     // Último valor médio válido para enviar (float para aplicar EMA)
 int ultimoBpmValido = 0;  // Guarda sempre o último BPM não-zero para não enviar 0
 
 const float LIMITE_GIROSCOPIO = 4.5;
@@ -224,14 +224,23 @@ void loop() {
   if (tempoAtual - ultimoTempoEnvioBLE >= INTERVALO_ENVIO_BLE) {
     ultimoTempoEnvioBLE = tempoAtual;
 
-    // A. Calcular média do BPM dos últimos 3 segundos
+    // A. Calcular média do BPM dos últimos 3 segundos COM FILTRO EMA
     if (bpmContagem > 0) {
-      beatAvgEnvio = bpmAcumulado / bpmContagem;
-      ultimoBpmValido = beatAvgEnvio; // Guarda como último valor conhecido
-    } else {
-      // Não houve batimentos novos — usa o último válido em vez de enviar 0
-      beatAvgEnvio = ultimoBpmValido;
-    }
+      float mediaJanelaAtual = (float)bpmAcumulado / bpmContagem;
+      
+      if (beatAvgEnvio == 0.0) {
+        beatAvgEnvio = mediaJanelaAtual; // Se for a primeira vez, assume o valor
+      } else {
+        // Aplica o filtro de estabilização (suaviza os saltos)
+        float alpha = 0.3; 
+        beatAvgEnvio = (mediaJanelaAtual * alpha) + (beatAvgEnvio * (1.0 - alpha));
+      }
+      ultimoBpmValido = (int)beatAvgEnvio; // Guarda como último valor conhecido
+    } 
+    
+    // Converte a média calculada para inteiro para enviar
+    int bpmFinalParaEnviar = (beatAvgEnvio > 0) ? (int)beatAvgEnvio : ultimoBpmValido;
+
     // Reinicia acumuladores para os próximos 3 segundos
     bpmAcumulado = 0;
     bpmContagem = 0;
@@ -240,14 +249,9 @@ void loop() {
     long somaGSR = 0;
     for(int i = 0; i < 5; i++) somaGSR += analogRead(GSR_PIN);
     
-    // 1. Média da leitura bruta a 12-bits (0 a 4095)
-    float mediaRaw12 = somaGSR / 5.0; 
-    
-    // 2. Converter para a escala de 10-bits (0 a 1023) exigida pela fórmula oficial
-    float raw10 = mediaRaw12 / 4.0; 
-    
-    // 3. Aplicar a fórmula de conversão para microSiemens
-    float edaFinal = 0.0; // Agora é um float para ter casas decimais!
+    float mediaRaw12 = somaGSR / 5.0; // 1. Média da leitura bruta a 12-bits (0 a 4095)
+    float raw10 = mediaRaw12 / 4.0; // 2. Converter para a escala de 10-bits (0 a 1023) exigida pela fórmula oficial
+    float edaFinal = 0.0; // 3. Aplicar a fórmula de conversão para microSiemens
     
     // Proteção matemática: 512 é o valor de circuito aberto (sem dedo)
     // Se o valor passar de 512, a matemática daria números negativos
@@ -278,13 +282,13 @@ void loop() {
     if (deviceConnected) {
       char bufferJSON[100];
       snprintf(bufferJSON, sizeof(bufferJSON), "{\"bpm\":%d,\"eda\":%.2f,\"mov\":%d,\"evt\":%d}",
-               beatAvgEnvio, edaFinal, flagMovimento, eventoAtivo);
+               bpmFinalParaEnviar, edaFinal, flagMovimento, eventoAtivo);
       pCharacteristic->setValue(bufferJSON);
       pCharacteristic->notify();
       Serial.print("BLE Enviado: ");
       Serial.println(bufferJSON);
     } else {
-      Serial.print("Local -> BPM: "); Serial.print(beatAvgEnvio);
+      Serial.print("Local -> BPM: "); Serial.print(bpmFinalParaEnviar);
       Serial.print(" | EDA: "); Serial.print(edaFinal);
       Serial.print(" | Mov: "); Serial.print(flagMovimento);
       Serial.print(" | Botao (evt): "); Serial.println(eventoAtivo);
