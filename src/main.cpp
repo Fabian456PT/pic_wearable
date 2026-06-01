@@ -75,11 +75,13 @@ void suspenderSensores() {
   sensoresSuspensos = true;
   Serial.println(">>> SENSORES SUSPENSOS (BLE continua ativo) <<<");
   Serial.flush();
-
+  
+  // Desliga LEDs do MAX30102 e coloca em shutdown
   particleSensor.setPulseAmplitudeRed(0);
   particleSensor.setPulseAmplitudeGreen(0);
   particleSensor.shutDown();
 
+  // Coloca MPU6050 em sleep via registo I2C
   Wire.beginTransmission(0x68);
   Wire.write(0x6B);
   Wire.write(0x40);
