@@ -40,6 +40,7 @@ int bpmAcumulado = 0;
 int bpmContagem = 0;
 float beatAvgEnvio = 0.0;     // Último valor médio válido para enviar (float para aplicar EMA)
 int ultimoBpmValido = 0;  // Guarda sempre o último BPM não-zero para não enviar 0
+float ultimoBpmInstantaneo = 0.0;
 
 const float LIMITE_GIROSCOPIO = 4.5;
 const float LIMITE_ACELERACAO = 15.0;
@@ -195,10 +196,28 @@ void loop() {
     lastBeat = millis();
     beatsPerMinute = 60 / (delta / 1000.0);
 
-    if (beatsPerMinute > 20 && beatsPerMinute < 255) {
-      // Acumula para a média dos 3 segundos
-      bpmAcumulado += (int)beatsPerMinute;
-      bpmContagem++;
+    // 1ª Barreira: Limites humanos absolutos (apertámos os limites para 40 a 200)
+    if (beatsPerMinute > 40 && beatsPerMinute < 200) {
+      
+      // Se for o primeiro batimento, aceitamos diretamente
+      if (ultimoBpmInstantaneo == 0.0) {
+        ultimoBpmInstantaneo = beatsPerMinute;
+        bpmAcumulado += (int)beatsPerMinute;
+        bpmContagem++;
+      } 
+      // 2ª Barreira: A Muralha (Rejeição de Outliers)
+      else {
+        // Se a diferença entre este batimento e o último for menor que 15 BPM...
+        if (abs(beatsPerMinute - ultimoBpmInstantaneo) < 15.0) {
+          bpmAcumulado += (int)beatsPerMinute;
+          bpmContagem++;
+          ultimoBpmInstantaneo = beatsPerMinute; // Atualiza a memória
+        } else {
+          // É ruído! O salto foi demasiado grande. Ignoramos e não somamos nada.
+          Serial.print(">>> RUÍDO CARDÍACO BLOQUEADO! Salto impossível para: ");
+          Serial.println(beatsPerMinute);
+        }
+      }
     }
   }
 
