@@ -52,7 +52,7 @@ unsigned long ultimoTempoClique = 0;
 int eventoAtivo = 0;
 
 unsigned long ultimoTempoEnvioBLE = 0;
-const int INTERVALO_ENVIO_BLE = 3000; // 3 segundos
+const int INTERVALO_ENVIO_BLE = 1000; // 1 segundos
 
 // --- 5. CONTROLO DO MODO DE REPOUSO ---
 const unsigned long TIMEOUT_SLEEP = 30000;
